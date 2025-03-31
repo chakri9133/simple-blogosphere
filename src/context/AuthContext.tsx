@@ -1,7 +1,14 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, supabase } from '@/lib/supabase';
+import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+
+type User = {
+  id: string;
+  email: string;
+  username?: string;
+  created_at?: string;
+};
 
 type AuthContextType = {
   user: User | null;
@@ -49,8 +56,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initAuth = async () => {
       setLoading(true);
       try {
-        const currentUser = await getUser();
-        setUser(currentUser);
+        // First check for existing session
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          const userData = await getUser();
+          setUser(userData);
+        }
       } catch (error) {
         console.error('Error in auth init:', error);
       } finally {
@@ -64,8 +75,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('Auth state changed:', event);
       if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-        const user = await getUser();
-        setUser(user);
+        // Use setTimeout to avoid potential deadlocks with Supabase client
+        setTimeout(async () => {
+          const user = await getUser();
+          setUser(user);
+        }, 0);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
       }
@@ -102,24 +116,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       // Sign up the user
       const { data: { user: authUser }, error: signUpError } = 
-        await supabase.auth.signUp({ email, password });
+        await supabase.auth.signUp({ 
+          email, 
+          password,
+          options: {
+            data: {
+              username: username
+            }
+          }
+        });
       
       if (signUpError || !authUser) {
         throw signUpError || new Error('Failed to create user');
-      }
-
-      // Create profile for the user
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authUser.id,
-          email,
-          username,
-          created_at: new Date().toISOString(),
-        });
-
-      if (profileError) {
-        throw profileError;
       }
       
       toast({
